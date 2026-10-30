@@ -590,7 +590,6 @@ Double Q-learning; аппроксимацию функции ценности; �
 Требуется Python 3.13 (проверено на 3.13.7, Windows 11, только CPU).
 
 ```bash
-cd project
 python -m venv .venv
 # Windows: .venv\Scripts\activate     Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt        # точные версии всех пакетов: requirements-freeze.txt
