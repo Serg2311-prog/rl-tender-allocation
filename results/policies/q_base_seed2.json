@@ -1,0 +1,17 @@
+{
+  "qlearning": {
+    "n_episodes": 200000,
+    "gamma": 0.95,
+    "alpha_mode": "visit",
+    "alpha_const": 0.05,
+    "alpha_power": 0.6,
+    "alpha_min": 0.01,
+    "eps_start": 1.0,
+    "eps_end": 0.02,
+    "eps_decay_fraction": 0.8,
+    "eval_every": 5000,
+    "n_val_episodes": 200
+  },
+  "condition": "base",
+  "agent_seed": 2
+}

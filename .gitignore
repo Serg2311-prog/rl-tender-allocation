@@ -1,0 +1,10 @@
+.venv*/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Логи запусков и сырые награды по эпизодам пересоздаются скриптами
+results/*.log
+results/*.err
+results/episode_rewards.npz
+# Пробный запуск из README
+results/smoke/
