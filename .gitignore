@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.idea/
+.vscode/
 # Логи запусков и сырые награды по эпизодам пересоздаются скриптами
 results/*.log
 results/*.err

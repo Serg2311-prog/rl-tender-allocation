@@ -63,7 +63,8 @@ def fig_learning_curves(hist, baselines) -> None:
     for fam in ("heuristic", "oracle", "random"):
         ax.axhline(baselines[fam]["mean"], color=COLORS[fam], ls="--", lw=1.2,
                    label=f"{NAMES[fam]} (без обучения)")
-    ax.set_title("Жадная политика на валидационных эпизодах\n(200 эпизодов, исходные условия рынка)")
+    ax.set_title("Жадная политика на валидационных эпизодах\n"
+                 "(200 эпизодов, исходные условия рынка; полоса = ±1 std по seed)")
     ax.set_xlabel("Обучающий эпизод")
     ax.set_ylabel(f"Средняя суммарная награда за эпизод, {UNIT}")
     ax.legend(fontsize=8, loc="lower right")
@@ -99,22 +100,26 @@ def fig_base_comparison(summary, per_seed) -> None:
     order = ["always_skip", "always_submit", "random", "heuristic", "q_base", "q_dr", "oracle"]
     fig, ax = plt.subplots(figsize=(11, 5))
     x = np.arange(len(order))
-    ax.bar(x, base.loc[order, "reward_mean"], yerr=base.loc[order, "reward_ci95"], capsize=4,
-           color=[COLORS[p] for p in order], alpha=0.85)
+    ax.bar(x, base.loc[order, "reward_mean"], yerr=base.loc[order, "reward_ci95_episodes"],
+           capsize=4, color=[COLORS[p] for p in order], alpha=0.85)
     for i, fam in enumerate(order):
+        m, ci = base.loc[fam, "reward_mean"], base.loc[fam, "reward_ci95_episodes"]
         if fam.startswith("q_"):
             pts = per_seed.query("scenario == 'base' and policy == @fam")["reward_mean"]
             ax.scatter(np.full(len(pts), i) + np.linspace(-0.15, 0.15, len(pts)), pts,
                        color="white", edgecolor="black", zorder=3, s=25,
                        label="отдельные seed" if fam == "q_base" else None)
-        m, ci = base.loc[fam, "reward_mean"], base.loc[fam, "reward_ci95"]
+            ax.errorbar(i + 0.3, m, yerr=base.loc[fam, "reward_ci95_seeds"], fmt="none",
+                        ecolor="#6a3d9a", elinewidth=2.5, capsize=3,
+                        label="95% ДИ по 5 seed обучения" if fam == "q_base" else None)
         ax.text(i + 0.12, m + ci + 1 if m >= 0 else m - ci - 3.5, f"{m:.1f}",
                 ha="left", fontsize=9)
     ax.set_xticks(x, [NAMES[p] for p in order], rotation=15, fontsize=9)
     ax.axhline(0, color="black", lw=0.8)
     ax.set_ylabel(f"Средняя суммарная награда за эпизод, {UNIT}")
     ax.set_title("Исходные условия: сравнение стратегий на 500 тестовых эпизодах\n"
-                 "(погрешность: 95% ДИ; для Q-learning -- по 5 seed обучения, иначе -- по эпизодам)")
+                 "(чёрные усы: 95% ДИ по тестовым эпизодам для всех стратегий; "
+                 "фиолетовые: 95% ДИ по seed для Q-learning)")
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
     _save(fig, "fig2_base_comparison.png")
@@ -129,11 +134,11 @@ def fig_robustness(summary, paired) -> None:
     for k, fam in enumerate(MAIN_POLICIES):
         d = summary[summary["policy"] == fam].set_index("scenario").loc[names]
         ax.bar(np.arange(len(names)) + (k - 2) * width, d["reward_mean"], width,
-               yerr=d["reward_ci95"], capsize=2, color=COLORS[fam], label=NAMES[fam])
+               yerr=d["reward_ci95_episodes"], capsize=2, color=COLORS[fam], label=NAMES[fam])
     ax.set_xticks(np.arange(len(names)), labels, rotation=25, ha="right", fontsize=8)
     ax.axhline(0, color="black", lw=0.8)
     ax.set_ylabel(f"Средняя суммарная награда, {UNIT}")
-    ax.set_title("Тестовые сценарии (500 эпизодов на сценарий, 95% ДИ)\n"
+    ax.set_title("Тестовые сценарии (500 эпизодов на сценарий, усы = 95% ДИ по эпизодам)\n"
                  "[B] = условия обучения базового агента, [DR] = внутри диапазона рандомизации, "
                  "[OUT] = вне всех обучающих диапазонов")
     ax.legend(fontsize=8, ncol=3)
@@ -142,13 +147,16 @@ def fig_robustness(summary, paired) -> None:
     ax = axes[1]
     for k, fam in enumerate(("q_base", "q_dr")):
         d = paired[paired["policy"] == fam].set_index("scenario").loc[names]
-        ax.errorbar(np.arange(len(names)) + (k - 0.5) * 0.2, d["diff_vs_heuristic"],
-                    yerr=d["diff_ci95_seeds"], fmt="o", capsize=4, color=COLORS[fam],
-                    label=f"{NAMES[fam]} (95% ДИ по seed)")
+        xs = np.arange(len(names)) + (k - 0.5) * 0.24
+        ax.errorbar(xs, d["diff_vs_heuristic"], yerr=d["diff_ci95_episodes"], fmt="none",
+                    ecolor=COLORS[fam], elinewidth=1, alpha=0.5, capsize=2)
+        ax.errorbar(xs, d["diff_vs_heuristic"], yerr=d["diff_ci95_seeds"], fmt="o",
+                    elinewidth=2.5, capsize=4, color=COLORS[fam], label=NAMES[fam])
     ax.axhline(0, color=COLORS["heuristic"], lw=1.5, ls="--", label="уровень эвристики")
     ax.set_xticks(np.arange(len(names)), labels, rotation=25, ha="right", fontsize=8)
     ax.set_ylabel(f"Награда агента минус награда эвристики, {UNIT}")
-    ax.set_title("Преимущество Q-learning над эвристикой (парно, на одних и тех же эпизодах)")
+    ax.set_title("Разность Q-learning и эвристики (парно, на одних и тех же эпизодах)\n"
+                 "толстые усы: 95% ДИ по 5 seed обучения; тонкие: 95% ДИ по 500 тестовым эпизодам")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     _save(fig, "fig3_robustness.png")
@@ -175,7 +183,8 @@ def fig_sweeps(summary) -> None:
                    label="условия базового обучения")
         ax.set_xlabel(xlabel)
         ax.set_ylabel(f"Средняя суммарная награда, {UNIT}")
-        ax.set_title(f"Зависимость от фактора «{xlabel.split(',')[0]}»\n(остальные условия -- исходные)")
+        ax.set_title(f"Зависимость от фактора «{xlabel.split(',')[0]}»\n"
+                     "(остальные условия -- исходные; полоса Q-learning = ±1 std по seed)")
         ax.axhline(0, color="black", lw=0.6)
         ax.grid(alpha=0.3)
     axes[0].legend(fontsize=8, loc="upper left")
@@ -293,9 +302,26 @@ def _md(df: pd.DataFrame) -> str:
     cols = list(df.columns)
     lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     for _, r in df.iterrows():
-        cells = [f"{v:.2f}" if isinstance(v, (float, np.floating)) else str(v) for v in r]
+        cells = []
+        for v in r:
+            if isinstance(v, (float, np.floating)):
+                cells.append("—" if pd.isna(v) else f"{v:.2f}")
+            else:
+                cells.append(str(v))
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
+
+
+def _num(x: float, sign: bool = False) -> str:
+    if pd.isna(x):
+        return "—"
+    return (f"{x:+.2f}" if sign else f"{x:.2f}").replace("-", "−")
+
+
+def _diff(mean: float, *ci95: float) -> str:
+    """Разность жирным, если ни один из переданных 95% ДИ не содержит 0."""
+    s = _num(mean, sign=True)
+    return f"**{s}**" if all(abs(mean) > c for c in ci95) else s
 
 
 def write_tables(summary, paired, agree) -> None:
@@ -303,11 +329,14 @@ def write_tables(summary, paired, agree) -> None:
     base = summary[summary["scenario"] == "base"].copy()
     order = ["always_skip", "always_submit", "random", "heuristic", "q_base", "q_dr", "oracle"]
     base = base.set_index("policy").loc[order].reset_index()
+    q = base["policy"].str.startswith("q_")
     t = pd.DataFrame({
         "Стратегия": base["policy"].map(NAMES),
-        "Награда, у.е.": [f"{m:.2f} ± {c:.2f}" for m, c in zip(base["reward_mean"], base["reward_ci95"])],
+        "Награда, у.е.": base["reward_mean"].map(_num),
+        "95% ДИ по эпизодам": base["reward_ci95_episodes"].map(lambda c: f"± {c:.2f}"),
+        "95% ДИ по seed": base["reward_ci95_seeds"].map(lambda c: "—" if pd.isna(c) else f"± {c:.2f}"),
         "Std по эпизодам": base["reward_std"],
-        "Std по seed": base["reward_seed_std"],
+        "Std по seed": base["reward_seed_std"].where(q).map(_num),
         "Маржа побед": base["revenue_mean"],
         "Штрафы": base["penalties_mean"],
         "Затраты": base["cost_mean"],
@@ -321,25 +350,47 @@ def write_tables(summary, paired, agree) -> None:
 
     names = [s.name for s in TEST_SCENARIOS]
     piv = summary[summary["scenario"].isin(names)]
-    rows = []
+    rows, diffs, others = [], [], []
     for s in TEST_SCENARIOS:
         d = piv[piv["scenario"] == s.name].set_index("policy")
         pb = paired[(paired["scenario"] == s.name)].set_index("policy")
+        label = f"{COVERAGE[s.coverage]} {s.title}"
         rows.append({
-            "Сценарий": f"{COVERAGE[s.coverage]} {s.title}",
-            "Случайная": d.loc["random", "reward_mean"],
-            "Эвристика": d.loc["heuristic", "reward_mean"],
-            "Q base": f"{d.loc['q_base', 'reward_mean']:.2f} ± {d.loc['q_base', 'reward_seed_std']:.2f}",
-            "Q DR": f"{d.loc['q_dr', 'reward_mean']:.2f} ± {d.loc['q_dr', 'reward_seed_std']:.2f}",
-            "Оракул": d.loc["oracle", "reward_mean"],
-            "Q base − эвр. (95% ДИ по seed)": f"{pb.loc['q_base', 'diff_vs_heuristic']:+.2f} ± {pb.loc['q_base', 'diff_ci95_seeds']:.2f}",
-            "Q DR − эвр. (95% ДИ по seed)": f"{pb.loc['q_dr', 'diff_vs_heuristic']:+.2f} ± {pb.loc['q_dr', 'diff_ci95_seeds']:.2f}",
-            "seed Q base > эвр.": f"{pb.loc['q_base', 'seeds_better_than_heuristic']}/{pb.loc['q_base', 'n_seeds']}",
-            "seed Q DR > эвр.": f"{pb.loc['q_dr', 'seeds_better_than_heuristic']}/{pb.loc['q_dr', 'n_seeds']}",
-            "Q DR − Q base (95% ДИ Уэлча)": f"{pb.loc['q_dr', 'dr_minus_base']:+.2f} ± {pb.loc['q_dr', 'dr_minus_base_ci95']:.2f}",
+            "Сценарий": label,
+            "Случайная": _num(d.loc["random", "reward_mean"]),
+            "Эвристика": _num(d.loc["heuristic", "reward_mean"]),
+            "Q base (± std по seed)": f"{_num(d.loc['q_base', 'reward_mean'])} ± {d.loc['q_base', 'reward_seed_std']:.2f}",
+            "Q DR (± std по seed)": f"{_num(d.loc['q_dr', 'reward_mean'])} ± {d.loc['q_dr', 'reward_seed_std']:.2f}",
+            "Оракул": _num(d.loc["oracle", "reward_mean"]),
+        })
+        row = {"Сценарий": label}
+        for fam, short in (("q_base", "Q base"), ("q_dr", "Q DR")):
+            r = pb.loc[fam]
+            row |= {
+                f"{short} − эвр.": _diff(r["diff_vs_heuristic"], r["diff_ci95_seeds"],
+                                         r["diff_ci95_episodes"]),
+                f"{short}: ДИ по seed": f"± {r['diff_ci95_seeds']:.2f}",
+                f"{short}: ДИ по эпизодам": f"± {r['diff_ci95_episodes']:.2f}",
+                f"{short}: seed > эвр.": f"{r['seeds_better_than_heuristic']}/{r['n_seeds']}",
+            }
+        diffs.append(row)
+        r = pb.loc["q_dr"]
+        others.append({
+            "Сценарий": label,
+            "Q DR − Q base": _diff(r["dr_minus_base"], r["dr_minus_base_ci95_seeds"],
+                                   r["dr_minus_base_ci95_episodes"]),
+            "DR − base: ДИ по seed (Уэлч)": f"± {r['dr_minus_base_ci95_seeds']:.2f}",
+            "DR − base: ДИ по эпизодам": f"± {r['dr_minus_base_ci95_episodes']:.2f}",
+            "Эвристика − оракул": _diff(r["heuristic_minus_oracle"],
+                                        r["heuristic_minus_oracle_ci95_episodes"]),
+            "Эвр. − оракул: ДИ по эпизодам": f"± {r['heuristic_minus_oracle_ci95_episodes']:.2f}",
         })
     out += ["## Тестовые сценарии: средняя награда, у.е. (Q: среднее ± std по 5 seed)", "",
-            _md(pd.DataFrame(rows)), ""]
+            _md(pd.DataFrame(rows)), "",
+            "## Тестовые сценарии: парная разность с эвристикой, у.е. (95% ДИ раздельно; "
+            "жирным -- оба ДИ не содержат 0)", "", _md(pd.DataFrame(diffs)), "",
+            "## Тестовые сценарии: разность DR − base и эвристика − оракул, у.е. "
+            "(жирным -- все указанные ДИ не содержат 0)", "", _md(pd.DataFrame(others)), ""]
 
     rows = []
     for s in TEST_SCENARIOS:

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from src.agent import QLearningAgent, StateDiscretizer, masked_argmax
-from src.config import QLearningConfig
+from src.config import AGENT_SEEDS, POLICIES_DIR, QLearningConfig
 from src.environment import TenderPortfolioEnv
 from src.train import train_agent
 
@@ -102,6 +102,18 @@ def test_train_cli_with_out_does_not_touch_main_results(tmp_path, monkeypatch):
     assert (out_dir / "q_base_seed0.npz").exists()
     assert (out_dir / "validation_baselines.json").exists()
     assert not main_results.exists()
+
+
+def test_published_policies_load_and_have_updates():
+    disc = StateDiscretizer()
+    horizon = TenderPortfolioEnv().cfg.horizon
+    expected_updates = QLearningConfig().n_episodes * horizon
+    for cond in ("base", "dr"):
+        for seed in AGENT_SEEDS:
+            agent = QLearningAgent.load(POLICIES_DIR / f"q_{cond}_seed{seed}.npz")
+            assert agent.q.shape == (disc.n_states, 2)
+            assert agent.visits.sum() == expected_updates
+            assert np.count_nonzero(agent.q) > 100
 
 
 def test_training_is_reproducible():

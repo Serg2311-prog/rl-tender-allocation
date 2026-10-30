@@ -140,40 +140,46 @@ def evaluate_all(n_episodes: int, include_sweeps: bool = True) -> None:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     per_seed.to_csv(RESULTS_DIR / "eval_per_seed.csv", index=False)
     np.savez_compressed(RESULTS_DIR / "episode_rewards.npz", **rewards)
-    summary = aggregate(per_seed, rewards, len(seeds))
-    summary.to_csv(RESULTS_DIR / "eval_summary.csv", index=False)
-    paired = paired_vs_heuristic(per_seed, rewards)
-    paired.to_csv(RESULTS_DIR / "paired_vs_heuristic.csv", index=False)
+    save_aggregates(per_seed, rewards)
     (RESULTS_DIR / "experiment_config.json").write_text(
         json.dumps({**config_snapshot(), "n_test_episodes_used": len(seeds)},
                    indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Saved results to {RESULTS_DIR} in {time.time() - t0:.1f}s")
 
 
-def aggregate(per_seed: pd.DataFrame, rewards: dict, n_episodes: int) -> pd.DataFrame:
+def aggregate(per_seed: pd.DataFrame, rewards: dict) -> pd.DataFrame:
     """Сводка по (сценарий, стратегия): средние по seed и эпизодам.
 
-    reward_std        -- разброс награды между эпизодами (по всем seed);
-    reward_seed_std   -- разброс средней награды между seed обучения;
-    reward_ci95       -- полуширина 95% ДИ: для Q-агентов t(n_seeds-1) * SE по seed,
-                         иначе 1.96 * SE по эпизодам.
+    Два источника неопределённости хранятся в разных колонках:
+    reward_std           -- разброс награды между эпизодами (по всем seed);
+    reward_seed_std      -- разброс средней награды между seed обучения (0 без обучения);
+    reward_ci95_episodes -- полуширина 95% ДИ по тестовым эпизодам, 1.96 * SE; для
+                            Q-агентов по награде эпизода, усреднённой по seed (агенты
+                            фиксированы, случайна выборка эпизодов);
+    reward_ci95_seeds    -- полуширина 95% ДИ по seed обучения, t(n_seeds-1) * SE средних
+                            по seed (эпизоды фиксированы, случаен seed); NaN без обучения.
     """
     metric_cols = [c for c in per_seed.columns
                    if c.endswith(("_mean", "_rate", "_share")) and c != "reward_mean"]
     out = []
     for (sc, fam), g in per_seed.groupby(["scenario", "policy"], sort=False):
-        all_r = np.concatenate([rewards[f"{sc}|{fam}|{s}"] for s in g["seed"]])
+        per_seed_r = np.stack([rewards[f"{sc}|{fam}|{s}"] for s in g["seed"]])
+        episode_mean = per_seed_r.mean(axis=0)
         row = g.iloc[0][["scenario", "title", "group", "coverage", "p_scale",
                          "cost_scale", "initial_budget", "policy"]].to_dict()
         row["n_seeds"] = len(g)
+        row["n_episodes"] = per_seed_r.shape[1]
         row["reward_mean"] = g["reward_mean"].mean()
-        row["reward_std"] = all_r.std(ddof=1)
+        row["reward_std"] = per_seed_r.ravel().std(ddof=1)
+        row["reward_ci95_episodes"] = (1.96 * episode_mean.std(ddof=1)
+                                       / np.sqrt(len(episode_mean)))
         if len(g) > 1:
             row["reward_seed_std"] = g["reward_mean"].std(ddof=1)
-            row["reward_ci95"] = t975(len(g) - 1) * row["reward_seed_std"] / np.sqrt(len(g))
+            row["reward_ci95_seeds"] = (t975(len(g) - 1) * row["reward_seed_std"]
+                                        / np.sqrt(len(g)))
         else:
             row["reward_seed_std"] = 0.0
-            row["reward_ci95"] = 1.96 * row["reward_std"] / np.sqrt(n_episodes)
+            row["reward_ci95_seeds"] = np.nan
         for c in metric_cols:
             row[c] = g[c].mean()
         out.append(row)
@@ -183,21 +189,25 @@ def aggregate(per_seed: pd.DataFrame, rewards: dict, n_episodes: int) -> pd.Data
 def paired_vs_heuristic(per_seed: pd.DataFrame, rewards: dict) -> pd.DataFrame:
     """Сравнение Q-агентов с эвристикой и оракулом на одних и тех же эпизодах.
 
-    diff_ci95_episodes -- разброс по тестовым эпизодам (seed усреднены);
-    diff_ci95_seeds    -- разброс по seed обучения, t(n_seeds-1);
-    dr_minus_base      -- разница агентов DR и base, ДИ Уэлча по seed.
+    Каждая колонка *_ci95_* учитывает только один источник неопределённости:
+    *_ci95_episodes -- 1.96 * SE парной разности по тестовым эпизодам (награда
+                       Q-агента усреднена по seed);
+    *_ci95_seeds    -- t(n_seeds-1) * SE разности средних по seed обучения;
+    dr_minus_base_ci95_seeds -- ДИ Уэлча по seed для разности агентов DR и base;
+    heuristic_minus_oracle   -- парная разность эвристики и оракула (без seed).
     """
     out = []
     for sc in per_seed["scenario"].unique():
         h = rewards[f"{sc}|heuristic|-1"]
         o = rewards[f"{sc}|oracle|-1"]
-        seed_means = {}
+        seed_means, episode_means = {}, {}
         for fam in ("q_base", "q_dr"):
             seeds = per_seed.query("scenario == @sc and policy == @fam")["seed"]
             per_seed_r = np.stack([rewards[f"{sc}|{fam}|{s}"] for s in seeds])
             diff_ep = per_seed_r.mean(axis=0) - h     # среднее по seed, парно по эпизодам
             seed_diffs = per_seed_r.mean(axis=1) - h.mean()
             seed_means[fam] = per_seed_r.mean(axis=1)
+            episode_means[fam] = per_seed_r.mean(axis=0)
             n = len(seeds)
             out.append({
                 "scenario": sc, "policy": fam,
@@ -212,10 +222,32 @@ def paired_vs_heuristic(per_seed: pd.DataFrame, rewards: dict) -> pd.DataFrame:
         b, d = seed_means["q_base"], seed_means["q_dr"]
         vb, vd = b.var(ddof=1) / len(b), d.var(ddof=1) / len(d)
         welch_df = (vb + vd) ** 2 / (vb ** 2 / (len(b) - 1) + vd ** 2 / (len(d) - 1))
+        dr_base_ep = episode_means["q_dr"] - episode_means["q_base"]
+        h_o = h - o
         for row in out[-2:]:
             row["dr_minus_base"] = d.mean() - b.mean()
-            row["dr_minus_base_ci95"] = t975(welch_df) * np.sqrt(vb + vd)
+            row["dr_minus_base_ci95_seeds"] = t975(welch_df) * np.sqrt(vb + vd)
+            row["dr_minus_base_ci95_episodes"] = (1.96 * dr_base_ep.std(ddof=1)
+                                                  / np.sqrt(len(dr_base_ep)))
+            row["heuristic_minus_oracle"] = h_o.mean()
+            row["heuristic_minus_oracle_ci95_episodes"] = (1.96 * h_o.std(ddof=1)
+                                                           / np.sqrt(len(h_o)))
     return pd.DataFrame(out)
+
+
+def save_aggregates(per_seed: pd.DataFrame, rewards: dict) -> None:
+    aggregate(per_seed, rewards).to_csv(RESULTS_DIR / "eval_summary.csv", index=False)
+    paired_vs_heuristic(per_seed, rewards).to_csv(RESULTS_DIR / "paired_vs_heuristic.csv",
+                                                  index=False)
+
+
+def reaggregate() -> None:
+    """Пересчёт сводных таблиц из сохранённых наград по эпизодам без прогона эпизодов."""
+    per_seed = pd.read_csv(RESULTS_DIR / "eval_per_seed.csv")
+    with np.load(RESULTS_DIR / "episode_rewards.npz") as data:
+        rewards = {k: data[k] for k in data.files}
+    save_aggregates(per_seed, rewards)
+    print(f"Recomputed eval_summary.csv and paired_vs_heuristic.csv in {RESULTS_DIR}")
 
 
 def main() -> None:
@@ -223,8 +255,13 @@ def main() -> None:
     ap.add_argument("--episodes", type=int, default=None,
                     help="число тестовых эпизодов на сценарий (по умолчанию из config)")
     ap.add_argument("--no-sweeps", action="store_true", help="без однофакторных развёрток")
+    ap.add_argument("--reaggregate", action="store_true",
+                    help="только пересчитать сводки из results/episode_rewards.npz")
     args = ap.parse_args()
-    evaluate_all(args.episodes or N_TEST_EPISODES, include_sweeps=not args.no_sweeps)
+    if args.reaggregate:
+        reaggregate()
+    else:
+        evaluate_all(args.episodes or N_TEST_EPISODES, include_sweeps=not args.no_sweeps)
 
 
 if __name__ == "__main__":

@@ -72,6 +72,16 @@ def test_budget_never_negative(env, cond):
                 assert not info["submitted"]
 
 
+def test_action_mask_always_allows_skip(env):
+    obs, info = env.reset(seed=4)
+    assert info["action_mask"][SKIP] == 1
+    env.budget = 0.0
+    mask = env.action_mask()
+    assert mask[SKIP] == 1 and mask[SUBMIT] == 0
+    obs, r, terminated, _, info = env.step(SKIP)
+    assert r == 0.0 and info["action_mask"][SKIP] == 1
+
+
 def test_unaffordable_submit_is_noop(env):
     env.reset(seed=3)
     env.budget = 0.5   # меньше любой стоимости подготовки

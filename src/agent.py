@@ -113,10 +113,9 @@ class QLearningAgent:
 
     @classmethod
     def load(cls, path: Path) -> "QLearningAgent":
-        data = np.load(path)
         meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
-        agent = cls(data["q"].shape[0], data["q"].shape[1],
-                    QLearningConfig(**meta["qlearning"]))
-        agent.q = data["q"]
-        agent.visits = data["visits"]
+        with np.load(path) as data:
+            q, visits = data["q"].copy(), data["visits"].copy()
+        agent = cls(q.shape[0], q.shape[1], QLearningConfig(**meta["qlearning"]))
+        agent.q, agent.visits = q, visits
         return agent

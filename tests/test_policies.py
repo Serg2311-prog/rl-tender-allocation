@@ -32,6 +32,15 @@ def test_all_policies_run_without_violations(cond):
         assert np.all(ep["budget_used"] <= 1.0 + 1e-9)
 
 
+def test_random_and_heuristic_are_different_policies():
+    env = TenderPortfolioEnv()
+    seeds = range(80)
+    r = run_episodes(env, RandomPolicy(0), seeds, BASE_CONDITIONS)
+    h = run_episodes(env, HeuristicPolicy(), seeds, BASE_CONDITIONS)
+    assert r["n_submitted"].mean() != pytest.approx(h["n_submitted"].mean())
+    assert r["reward"].mean() < h["reward"].mean() - 5
+
+
 def test_heuristic_rule():
     pol = HeuristicPolicy()
     mask = {"action_mask": np.array([1, 1]), "budget": 40.0}
